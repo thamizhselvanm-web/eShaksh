@@ -32,6 +32,12 @@ export const AIExplanationPanel: React.FC<AIExplanationPanelProps> = ({ evidence
   }, [activePrompt, evidence]);
 
   const checkOllamaStatus = async () => {
+    const isLocalhost = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+    if (!isLocalhost) {
+      setConnectionStatus('OFFLINE');
+      return;
+    }
+
     setConnectionStatus('CHECKING');
     try {
       const res = await fetch('/ollama/api/tags', { method: 'GET' });
@@ -256,33 +262,37 @@ ${dominantSignal === 'VENDOR_NETWORK'
     setIsGenerating(true);
     const prompt = buildStructuredPrompt(mode, userInstruction);
 
-    // Try real Ollama proxy endpoint
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 3000);
+    const isLocalhost = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
 
-      const res = await fetch('/ollama/api/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: controller.signal,
-        body: JSON.stringify({
-          model: modelName,
-          prompt: prompt,
-          stream: false
-        })
-      });
-      clearTimeout(timeoutId);
+    // Only attempt real Ollama proxy endpoint if on localhost and status is ONLINE
+    if (isLocalhost && connectionStatus === 'ONLINE') {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 3000);
 
-      if (res.ok) {
-        const data = await res.json();
-        if (data && data.response) {
-          setConnectionStatus('ONLINE');
-          animateTextStream(data.response);
-          return;
+        const res = await fetch('/ollama/api/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
+          body: JSON.stringify({
+            model: modelName,
+            prompt: prompt,
+            stream: false
+          })
+        });
+        clearTimeout(timeoutId);
+
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.response) {
+            setConnectionStatus('ONLINE');
+            animateTextStream(data.response);
+            return;
+          }
         }
+      } catch (err) {
+        // Connection offline handled gracefully by grounded engine
       }
-    } catch (err) {
-      // Connection offline handled gracefully by grounded engine
     }
 
     // Dynamic grounded Qwen3 response for custom questions or preset modes
