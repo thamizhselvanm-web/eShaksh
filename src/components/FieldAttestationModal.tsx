@@ -68,6 +68,9 @@ export const FieldAttestationModal: React.FC<FieldAttestationModalProps> = ({
     }
   }, []);
 
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
+
   // Generate cryptographic hashes when media is selected/recorded
   const generateHashes = (type: 'photo' | 'video', customUrl?: string) => {
     const randomHex = Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
@@ -78,7 +81,9 @@ export const FieldAttestationModal: React.FC<FieldAttestationModalProps> = ({
     setComputedManifestId(manifestUuid);
     setDbRecordId(dbId);
 
-    if (!mediaPreviewUrl && !customUrl) {
+    if (customUrl) {
+      setMediaPreviewUrl(customUrl);
+    } else if (!mediaPreviewUrl) {
       if (type === 'video') {
         setMediaPreviewUrl('https://assets.mixkit.co/videos/preview/mixkit-construction-workers-working-on-a-building-41618-large.mp4');
       } else {
@@ -91,14 +96,38 @@ export const FieldAttestationModal: React.FC<FieldAttestationModalProps> = ({
     setIsRecording(true);
     setRecordedSeconds(0);
     setMediaPreviewUrl(null);
+    recordedChunksRef.current = [];
 
-    // Try camera stream
+    // Try camera stream & MediaRecorder
     try {
       if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
           videoRef.current.play();
+        }
+
+        if (typeof MediaRecorder !== 'undefined') {
+          const mediaRecorder = new MediaRecorder(stream);
+          mediaRecorderRef.current = mediaRecorder;
+
+          mediaRecorder.ondataavailable = (event) => {
+            if (event.data && event.data.size > 0) {
+              recordedChunksRef.current.push(event.data);
+            }
+          };
+
+          mediaRecorder.onstop = () => {
+            const blob = new Blob(recordedChunksRef.current, { type: 'video/webm' });
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+              const dataUrl = ev.target?.result as string;
+              generateHashes('video', dataUrl);
+            };
+            reader.readAsDataURL(blob);
+          };
+
+          mediaRecorder.start();
         }
       }
     } catch (err) {
@@ -113,13 +142,20 @@ export const FieldAttestationModal: React.FC<FieldAttestationModalProps> = ({
   const stopRecording = () => {
     setIsRecording(false);
     if (timerRef.current) clearInterval(timerRef.current);
+
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    }
+
     if (videoRef.current && videoRef.current.srcObject) {
       const stream = videoRef.current.srcObject as MediaStream;
       stream.getTracks().forEach((track) => track.stop());
       videoRef.current.srcObject = null;
     }
 
-    generateHashes('video');
+    if (recordedChunksRef.current.length === 0) {
+      generateHashes('video');
+    }
   };
 
   const snapPhoto = () => {
@@ -130,16 +166,28 @@ export const FieldAttestationModal: React.FC<FieldAttestationModalProps> = ({
     const file = e.target.files?.[0];
     if (file) {
       setUploadedFileName(file.name);
-      const url = URL.createObjectURL(file);
-      setMediaPreviewUrl(url);
-      const isVid = file.type.startsWith('video');
-      generateHashes(isVid ? 'video' : 'photo', url);
+      const isVid = file.type.startsWith('video') || !!file.name.match(/\.(mp4|webm|mov|mkv|avi)$/i);
+      
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const dataUrl = ev.target?.result as string;
+        generateHashes(isVid ? 'video' : 'photo', dataUrl);
+      };
+      reader.readAsDataURL(file);
     }
   };
 
   const handleCommit = () => {
     const targetWork = evidenceItems.find((w) => w.workId === targetWorkId) || evidenceItems[0];
     if (!targetWork) return;
+
+    const isVid =
+      captureMode === 'VIDEO' ||
+      (uploadedFileName && !!uploadedFileName.match(/\.(mp4|webm|mov|mkv|avi)$/i)) ||
+      (mediaPreviewUrl && (mediaPreviewUrl.startsWith('data:video') || mediaPreviewUrl.startsWith('blob:') || mediaPreviewUrl.includes('.mp4') || mediaPreviewUrl.includes('.webm')));
+
+    const finalMediaType = isVid ? 'video' : 'photo';
+    const finalMediaUrl = mediaPreviewUrl || 'https://assets.mixkit.co/videos/preview/mixkit-construction-workers-working-on-a-building-41618-large.mp4';
 
     const newAttestationRecord: FieldAttestationRecord = {
       c2paSigned: attestationStatus === 'PASSED',
@@ -165,8 +213,8 @@ export const FieldAttestationModal: React.FC<FieldAttestationModalProps> = ({
       claimedWeather: 'Clear Sunny, 32°C',
       historicalApiWeather: 'Clear Sunny, 31.8°C (OpenWeatherMap)',
       weatherMatch: true,
-      mediaType: captureMode === 'VIDEO' ? 'video' : 'photo',
-      mediaUrl: mediaPreviewUrl || 'https://assets.mixkit.co/videos/preview/mixkit-construction-workers-working-on-a-building-41618-large.mp4',
+      mediaType: finalMediaType,
+      mediaUrl: finalMediaUrl,
       videoDurationSec: recordedSeconds || 15,
       mediaHashSha256: computedMediaHash || 'sha256:7f9a8b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a',
       dbRecordId: dbRecordId || `DB-ATT-2026-${Math.floor(100000 + Math.random() * 900000)}`,

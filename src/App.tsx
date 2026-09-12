@@ -11,8 +11,28 @@ import { EvidenceObject, AgencyProfileData, OverviewMetrics, FieldAttestationRec
 
 export const App: React.FC = () => {
   const [metrics, setMetrics] = useState<OverviewMetrics>(INITIAL_METRICS);
-  const [evidenceItems, setEvidenceItems] = useState<EvidenceObject[]>(MOCK_EVIDENCE_ITEMS);
+  const [evidenceItems, setEvidenceItems] = useState<EvidenceObject[]>(() => {
+    try {
+      const saved = localStorage.getItem('eshaksh_evidence_items');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch (e) {}
+    return MOCK_EVIDENCE_ITEMS;
+  });
+
   const [selectedConstituency, setSelectedConstituency] = useState<string>('Jaipur Parliamentary Constituency (#14)');
+
+  // Sync to localStorage
+  const updateAndSaveEvidenceItems = (items: EvidenceObject[]) => {
+    setEvidenceItems(items);
+    try {
+      localStorage.setItem('eshaksh_evidence_items', JSON.stringify(items));
+    } catch (e) {
+      // Handle quota limit gracefully
+    }
+  };
 
   // Navigation View State
   const [currentView, setCurrentView] = useState<'overview' | 'agency' | 'anomaly'>('overview');
@@ -67,7 +87,7 @@ export const App: React.FC = () => {
       return item;
     });
 
-    setEvidenceItems(updatedItems);
+    updateAndSaveEvidenceItems(updatedItems);
 
     if (selectedAnomaly && selectedAnomaly.workId === workId) {
       setSelectedAnomaly({
@@ -113,7 +133,7 @@ export const App: React.FC = () => {
             onSelectAnomaly={handleSelectAnomaly}
             onSelectAgency={handleSelectAgency}
             onDatasetParsed={({ evidenceItems: newItems, metrics: newMetrics }) => {
-              setEvidenceItems(newItems);
+              updateAndSaveEvidenceItems(newItems);
               setMetrics(newMetrics);
               showToast(`Live Dataset Analyzed: ${newItems.length} records processed across 3 core signals.`);
             }}
@@ -157,12 +177,12 @@ export const App: React.FC = () => {
         onClose={() => setIsIngestionOpen(false)}
         onSuccess={handleIngestionSuccess}
         onDatasetParsed={({ evidenceItems: newItems, metrics: newMetrics }) => {
-          setEvidenceItems(newItems);
+          updateAndSaveEvidenceItems(newItems);
           setMetrics(newMetrics);
           showToast(`Dataset Parsed & Pipeline Executed: ${newItems.length} records processed across 3 core signals.`);
         }}
         onResetDataset={() => {
-          setEvidenceItems(MOCK_EVIDENCE_ITEMS);
+          updateAndSaveEvidenceItems(MOCK_EVIDENCE_ITEMS);
           setMetrics(INITIAL_METRICS);
           showToast("Restored pre-seeded SIH demo dataset (3 planted cases).");
         }}
